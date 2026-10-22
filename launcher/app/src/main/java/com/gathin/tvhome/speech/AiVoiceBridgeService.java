@@ -10,6 +10,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
+import android.content.pm.PackageManager;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
@@ -267,7 +268,7 @@ public class AiVoiceBridgeService extends Service {
             "(?:搜索|搜一下|搜搜|搜|查找|找一下|找找|找|播放|播|不看|卟看|步看|部看|康|看|打开|点播)";
 
     private static final Pattern PATTERN_YT_OPEN = Pattern.compile(
-            "^(?:打开|启动|运行|进入|进|去)\\s*" + YT_VARIANTS + "\\s*$",
+            "^(?:(?:请|麻烦)?(?:帮我|替我|给我)?\\s*)?(?:打开|启动|运行|进入|进|去)?\\s*" + YT_VARIANTS + "\\s*$",
             Pattern.CASE_INSENSITIVE
     );
 
@@ -285,8 +286,26 @@ public class AiVoiceBridgeService extends Service {
             Pattern.CASE_INSENSITIVE
     );
 
+    // 夸克网盘直接打开指令（支持打开夸克、打开夸克网盘、帮我打开夸克等）
+    private static final Pattern PATTERN_QUARK_OPEN = Pattern.compile(
+            "^(?:(?:请|麻烦)?(?:帮我|替我|给我)?\\s*)?(?:打开|启动|运行|进入|进|去)?\\s*(?:夸克网盘|夸克|quark|quark\\s*tv)\\s*$",
+            Pattern.CASE_INSENSITIVE
+    );
+
+    // 媒体中心直接打开指令（支持打开媒体中心、进入本地媒体等）
+    private static final Pattern PATTERN_MEDIACENTER_OPEN = Pattern.compile(
+            "^(?:(?:请|麻烦)?(?:帮我|替我|给我)?\\s*)?(?:打开|启动|运行|进入|进|去)?\\s*(?:媒体中心|本地媒体|usb媒体)\\s*$",
+            Pattern.CASE_INSENSITIVE
+    );
+
+    // 全局通用视频搜索指令（帮我找xx、帮我搜xx、搜索xx、搜xx、找xx）
+    private static final Pattern PATTERN_GLOBAL_SEARCH = Pattern.compile(
+            "^(?:(?:请|麻烦)?(?:帮我|替我|给我)?\\s*(?:去|在)?\\s*)?(?:搜索|搜一下|搜搜|搜|查找|找一下|找找|找)\\s*(.+)$",
+            Pattern.CASE_INSENSITIVE
+    );
+
     private static final Pattern PATTERN_BILI_OPEN = Pattern.compile(
-            "^(?:打开|启动|运行|进入|进|去)\\s*(?:b站|哔哩哔哩)\\s*$",
+            "^(?:(?:请|麻烦)?(?:帮我|替我|给我)?\\s*)?(?:打开|启动|运行|进入|进|去)?\\s*(?:b站|哔哩哔哩)\\s*$",
             Pattern.CASE_INSENSITIVE
     );
 
@@ -1181,19 +1200,31 @@ public class AiVoiceBridgeService extends Service {
     }
 
     /**
-     * 判断并处理影视 / 视频应用专项搜索指令（如 YouTube / SmartTube / B站）
+     * 判断并处理影视 / 视频应用专项搜索指令（如 YouTube / SmartTube / B站 / 夸克 / 媒体中心）
      */
     private boolean handleAppOrVideoSearch(String query) {
         if (query == null || query.trim().isEmpty()) return false;
         String text = query.trim();
 
-        // 1. YouTube / 油管 直接打开应用（无具体搜索关键词）
-        if (isYouTubeOpenCommand(text)) {
-            launchYouTubeApp();
+        // 1. 夸克网盘 直接打开应用
+        if (PATTERN_QUARK_OPEN.matcher(text).matches()) {
+            launchQuarkApp();
             return true;
         }
 
-        // 2. 显式指定 YouTube / 油管 搜索或播放
+        // 2. 媒体中心 直接打开应用
+        if (PATTERN_MEDIACENTER_OPEN.matcher(text).matches()) {
+            launchMediaCenterApp();
+            return true;
+        }
+
+        // 3. YouTube / 油管 直接打开应用（无具体搜索关键词）
+        if (isYouTubeOpenCommand(text)) {
+            launchYouTubeApp(text);
+            return true;
+        }
+
+        // 4. 显式指定 YouTube / 油管 搜索或播放
         // 支持所有常见口语表达与同音字变体：
         // "去油管搜索周围", "去YouTube搜索周杰伦", "在有头部康学云", "去有兔不看徐云", "在有多不看虚云"
         String ytKeyword = extractYouTubeKeyword(text);
@@ -1202,7 +1233,7 @@ public class AiVoiceBridgeService extends Service {
             return true;
         }
 
-        // 3. B站 / 哔哩哔哩 直接打开或搜索
+        // 5. B站 / 哔哩哔哩 直接打开或搜索
         if (PATTERN_BILI_OPEN.matcher(text).matches()) {
             launchBilibiliApp();
             return true;
@@ -1214,7 +1245,14 @@ public class AiVoiceBridgeService extends Service {
             return true;
         }
 
-        // 4. 当前前台处于 YouTube 或 SmartTube 时，通用“搜索xxx / 搜xxx / 看xxx / 播放xxx”
+        // 6. 全局通用视频搜索指令（帮我找xx、帮我搜xx、搜索xx、搜xx、找xx）统一唤起 YouTube 搜索
+        String globalKeyword = extractGlobalSearchKeyword(text);
+        if (globalKeyword != null && !globalKeyword.isEmpty()) {
+            launchYouTubeSearch(globalKeyword);
+            return true;
+        }
+
+        // 7. 当前前台处于 YouTube 或 SmartTube 时，通用“搜索xxx / 搜xxx / 看xxx / 播放xxx”
         String fgPkg = ScreenCaptureAccessibilityService.getForegroundPackage();
         if (fgPkg == null || fgPkg.isEmpty()) {
             try {
@@ -1325,19 +1363,103 @@ public class AiVoiceBridgeService extends Service {
         return null;
     }
 
+    private String extractGlobalSearchKeyword(String text) {
+        if (text == null) return null;
+        String t = text.trim();
+        Matcher m = PATTERN_GLOBAL_SEARCH.matcher(t);
+        if (m.matches()) {
+            String kw = cleanExtractedKeyword(m.group(1));
+            if (!kw.isEmpty()) return kw;
+        }
+        return null;
+    }
+
+    private Intent getAppLaunchIntent(String packageName) {
+        if (packageName == null) return null;
+        PackageManager pm = getPackageManager();
+        Intent intent = pm.getLaunchIntentForPackage(packageName);
+        if (intent == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                intent = pm.getLeanbackLaunchIntentForPackage(packageName);
+            } catch (Throwable ignored) {}
+        }
+        return intent;
+    }
+
+    private void launchQuarkApp() {
+        writeLog("【应用启动路由】打开夸克网盘");
+        speakText("正在为您打开夸克网盘");
+        if (mOverlay != null) {
+            mOverlay.showReply("打开应用", "正在打开夸克网盘...");
+        }
+        mHandler.postDelayed(() -> {
+            try {
+                Intent launchIntent = getAppLaunchIntent("com.quark.yun.tv");
+                if (launchIntent == null) {
+                    launchIntent = new Intent(Intent.ACTION_MAIN);
+                    launchIntent.setComponent(new ComponentName("com.quark.yun.tv", "com.extscreen.runtime.LauncherAlias"));
+                }
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+                startActivity(launchIntent);
+                exitConversationAndStopListening();
+            } catch (Exception e) {
+                writeLog("打开夸克网盘异常: " + e.getMessage());
+            }
+        }, 500);
+    }
+
+    private void launchMediaCenterApp() {
+        writeLog("【应用启动路由】打开媒体中心");
+        speakText("正在为您打开媒体中心");
+        if (mOverlay != null) {
+            mOverlay.showReply("打开应用", "正在打开媒体中心...");
+        }
+        mHandler.postDelayed(() -> {
+            try {
+                Intent launchIntent = getAppLaunchIntent("com.jamdeo.tv.mediacenter");
+                if (launchIntent == null) {
+                    launchIntent = new Intent(Intent.ACTION_MAIN);
+                    launchIntent.setComponent(new ComponentName("com.jamdeo.tv.mediacenter", "com.jamdeo.tv.mediacenter.MediaCenterActivity"));
+                }
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+                startActivity(launchIntent);
+                exitConversationAndStopListening();
+            } catch (Exception e) {
+                writeLog("打开媒体中心异常: " + e.getMessage());
+            }
+        }, 500);
+    }
+
     private void launchYouTubeApp() {
-        writeLog("【应用启动路由】打开 YouTube / SmartTube");
+        launchYouTubeApp(null);
+    }
+
+    private void launchYouTubeApp(String text) {
+        writeLog("【应用启动路由】打开 YouTube / SmartTube: " + text);
         speakText("正在为您打开 YouTube");
         if (mOverlay != null) {
             mOverlay.showReply("打开应用", "正在打开 YouTube...");
         }
         mHandler.postDelayed(() -> {
             try {
-                String targetPkg = isPackageInstalled("org.smarttube.stable") ? "org.smarttube.stable" : "com.google.android.youtube.tv";
-                Intent launchIntent = getPackageManager().getLaunchIntentForPackage(targetPkg);
+                String targetPkg = "com.google.android.youtube.tv";
+                if (text != null && text.toLowerCase().contains("smarttube")) {
+                    if (isPackageInstalled("org.smarttube.stable")) {
+                        targetPkg = "org.smarttube.stable";
+                    }
+                } else {
+                    if (isPackageInstalled("com.google.android.youtube.tv")) {
+                        targetPkg = "com.google.android.youtube.tv";
+                    } else if (isPackageInstalled("org.smarttube.stable")) {
+                        targetPkg = "org.smarttube.stable";
+                    }
+                }
+                Intent launchIntent = getAppLaunchIntent(targetPkg);
                 if (launchIntent != null) {
-                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
                     startActivity(launchIntent);
+                } else {
+                    writeLog("未找到可启动的 YouTube 应用: " + targetPkg);
                 }
                 exitConversationAndStopListening();
             } catch (Exception e) {
@@ -1354,9 +1476,9 @@ public class AiVoiceBridgeService extends Service {
         }
         mHandler.postDelayed(() -> {
             try {
-                Intent launchIntent = getPackageManager().getLaunchIntentForPackage("com.bilibili.tv");
+                Intent launchIntent = getAppLaunchIntent("com.bilibili.tv");
                 if (launchIntent != null) {
-                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
                     startActivity(launchIntent);
                 }
                 exitConversationAndStopListening();

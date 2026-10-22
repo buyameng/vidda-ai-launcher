@@ -26,6 +26,16 @@ public class BootReceiver extends BroadcastReceiver {
 
         AiVoiceBridgeService.start(context);
 
+        // 开机与待机唤醒时静默触发 Karing 自动化连接保底
+        try {
+            Intent karingIntent = new Intent("com.nebula.karing.action.CONNECT");
+            karingIntent.setPackage("com.nebula.karing");
+            context.sendBroadcast(karingIntent);
+            Log.i(TAG, "已向 Karing 发送后台自动化连接广播");
+        } catch (Throwable t) {
+            Log.w(TAG, "发送 Karing 自动化广播异常: " + t.getMessage());
+        }
+
         // 仅开机时拉起桌面；待机唤醒回到原应用时绝不强抢焦点
         if (isColdBoot) {
             try {
