@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Focused by TV remote - dark contrast on white pill -->
+    <item android:state_focused="true" android:color="#FF111111" />
+    <!-- Light is ON (Selected) - Brilliant warm amber/gold -->
+    <item android:state_selected="true" android:color="#FFFFD166" />
+    <!-- Light is OFF (Unselected) - Dimmed/subdued -->
+    <item android:color="#4DFFFFFF" />
+</selector>

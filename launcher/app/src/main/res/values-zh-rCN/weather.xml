@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="weather_today">今天</string>
+    <string name="weather_tomorrow">明天</string>
+    <string name="weather_now">当前 %1$s°</string>
+
+    <string name="wmo_clear">晴</string>
+    <string name="wmo_mainly_clear">晴间多云</string>
+    <string name="wmo_partly_cloudy">多云</string>
+    <string name="wmo_overcast">阴</string>
+    <string name="wmo_fog">雾</string>
+    <string name="wmo_drizzle">毛毛雨</string>
+    <string name="wmo_light_rain">小雨</string>
+    <string name="wmo_rain">中雨</string>
+    <string name="wmo_heavy_rain">大雨</string>
+    <string name="wmo_freezing_rain">冻雨</string>
+    <string name="wmo_light_snow">小雪</string>
+    <string name="wmo_snow">中雪</string>
+    <string name="wmo_heavy_snow">大雪</string>
+    <string name="wmo_showers">阵雨</string>
+    <string name="wmo_heavy_showers">强阵雨</string>
+    <string name="wmo_snow_showers">阵雪</string>
+    <string name="wmo_thunder">雷雨</string>
+    <string name="wmo_thunder_hail">雷暴冰雹</string>
+    <string name="wmo_cloudy">多云</string>
+
+    <string name="advice_tshirt">短袖</string>
+    <string name="advice_light">薄衫</string>
+    <string name="advice_jacket">外套</string>
+    <string name="advice_coat">厚外套</string>
+    <string name="advice_down">羽绒服</string>
+    <string name="advice_umbrella">带伞</string>
+    <string name="advice_snow">防滑保暖</string>
+    <string name="advice_swing">早晚添衣</string>
+    <string name="advice_wind">防风</string>
+</resources>

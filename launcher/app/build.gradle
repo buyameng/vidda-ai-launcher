@@ -1,0 +1,69 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.gathin.tvhome'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.gathin.tvhome'
+        minSdk 26
+        targetSdk 29
+        versionCode 220
+        versionName '2.2.0'
+    }
+
+    buildTypes {
+        release {
+            signingConfig signingConfigs.debug
+            minifyEnabled false
+        }
+    }
+
+    buildFeatures {
+        aidl true
+    }
+
+    lint {
+        // The launcher is sideloaded over ADB, never published to Google Play, so Play's minimum targetSdk
+        // does not apply; without this, lintVitalRelease fails assembleRelease.
+        disable 'ExpiredTargetSdkVersion', 'ExtraTranslation', 'MissingTranslation'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    sourceSets {
+        main {
+            assets.srcDirs += [layout.buildDirectory.dir("generated/config-assets")]
+        }
+    }
+}
+
+tasks.register('generateConfigAsset') {
+    def outDir = layout.buildDirectory.dir("generated/config-assets")
+    outputs.dir(outDir)
+    doLast {
+        def target = outDir.get().file("tvhome_config.json").asFile
+        target.parentFile.mkdirs()
+        def candidate = file("${rootDir}/../../tvhome_config.json")
+        if (!candidate.exists()) {
+            candidate = file("${rootDir}/tvhome_config.json")
+        }
+        if (!candidate.exists()) {
+            candidate = file("${rootDir}/tvhome_config.example.json")
+        }
+        if (candidate.exists()) {
+            target.text = candidate.text
+        }
+    }
+}
+preBuild.dependsOn generateConfigAsset
+
+dependencies {
+    implementation 'androidx.recyclerview:recyclerview:1.3.2'
+    implementation 'androidx.dynamicanimation:dynamicanimation:1.0.0'
+}

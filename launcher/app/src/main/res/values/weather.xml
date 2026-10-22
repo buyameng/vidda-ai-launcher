@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="weather_today">Today</string>
+    <string name="weather_tomorrow">Tomorrow</string>
+    <string name="weather_now">now %1$s°</string>
+
+    <string name="wmo_clear">Clear</string>
+    <string name="wmo_mainly_clear">Mostly clear</string>
+    <string name="wmo_partly_cloudy">Partly cloudy</string>
+    <string name="wmo_overcast">Overcast</string>
+    <string name="wmo_fog">Fog</string>
+    <string name="wmo_drizzle">Drizzle</string>
+    <string name="wmo_light_rain">Light rain</string>
+    <string name="wmo_rain">Rain</string>
+    <string name="wmo_heavy_rain">Heavy rain</string>
+    <string name="wmo_freezing_rain">Freezing rain</string>
+    <string name="wmo_light_snow">Light snow</string>
+    <string name="wmo_snow">Snow</string>
+    <string name="wmo_heavy_snow">Heavy snow</string>
+    <string name="wmo_showers">Showers</string>
+    <string name="wmo_heavy_showers">Heavy showers</string>
+    <string name="wmo_snow_showers">Snow showers</string>
+    <string name="wmo_thunder">Thunderstorm</string>
+    <string name="wmo_thunder_hail">Thunder and hail</string>
+    <string name="wmo_cloudy">Cloudy</string>
+
+    <string name="advice_tshirt">T-shirt</string>
+    <string name="advice_light">Light layers</string>
+    <string name="advice_jacket">Jacket</string>
+    <string name="advice_coat">Warm coat</string>
+    <string name="advice_down">Down jacket</string>
+    <string name="advice_umbrella">Umbrella</string>
+    <string name="advice_snow">Warm and grippy</string>
+    <string name="advice_swing">Layer up</string>
+    <string name="advice_wind">Windproof</string>
+</resources>

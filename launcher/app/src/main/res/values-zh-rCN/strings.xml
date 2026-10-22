@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">主屏幕</string>
+    <string name="wifi">无线网络</string>
+    <string name="settings">设置</string>
+    <string name="good_morning">早上好</string>
+    <string name="good_afternoon">下午好</string>
+    <string name="good_evening">晚上好</string>
+    <string name="good_night">夜深了</string>
+    <string name="ethernet">有线网络</string>
+    <string name="offline">未联网</string>
+    <string name="not_available">当前电视不支持此操作</string>
+    <string name="cant_open">无法打开 %1$s</string>
+    <string name="date_format">M月d日  EEEE</string>
+    <string name="dream_name">时钟屏保</string>
+    <string name="pin_to_dock">设为常驻应用</string>
+    <string name="unpin_from_dock">移出常驻应用</string>
+    <string name="app_details">应用信息</string>
+    <string name="uninstall">卸载此应用</string>
+    <string name="pinned_toast">已添加至常驻栏</string>
+    <string name="unpinned_toast">已从常驻栏移出</string>
+    <string name="dock_full">常驻栏已满（最多 4 个应用）</string>
+    <string name="accessibility_service_description">AI 语音无感识屏服务</string>
+    <string name="light_movie">电影模式</string>
+    <string name="light_game">游戏模式</string>
+    <string name="light_off">关灯</string>
+    <string name="light_toggle">氛围灯开关</string>
+</resources>

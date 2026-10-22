@@ -1,0 +1,18 @@
+tools/venv/
+tools/adbkey/
+tools/__pycache__/
+launcher/.gradle/
+launcher/build/
+launcher/app/build/
+launcher/local.properties
+# your own TV's dumps (serial, android_id, device names) stay local
+backup/
+.DS_Store
+**/.DS_Store
+
+# 本地私密配置文件（包含真实网关密钥、私有 IP、智能家居地址）
+tvhome_config.json
+**/tvhome_config.json
+config.json
+**/config.json
+!*example.json

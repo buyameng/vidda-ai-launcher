@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Apps pinned to the dock row at the bottom, in this order. Missing apps are skipped. -->
+    <string-array name="dock_apps">
+        <item>com.nebula.karing</item>
+        <item>org.smarttube.stable</item>
+        <item>com.quark.yun.tv</item>
+        <item>com.bilibili.tv</item>
+    </string-array>
+
+    <!-- Apps that declare LAUNCHER only (no LEANBACK_LAUNCHER) but should still appear as tiles. -->
+    <string-array name="extra_apps">
+        <item>com.jamdeo.tv.mediacenter</item>
+    </string-array>
+
+    <!-- Apps never shown as tiles. -->
+    <string-array name="hidden_apps">
+        <item>com.jamdeo.tv.vod</item>
+        <item>com.jamdeo.tv.livetv</item>
+        <item>com.hisense.tv.fitmirror</item>
+        <item>com.keylab.speech.view.vidaa</item>
+        <item>com.hisense.widget.pro</item>
+        <item>ca.dstudio.atvlauncher.pro</item>
+        <item>com.oversea.aslauncher</item>
+        <item>com.shihab.diplay</item>
+        <item>com.meetingroom</item>
+        <item>com.didjdk.adbhelper</item>
+    </string-array>
+
+    <!-- Tiles per row in the grid; the dock always has this many slots. -->
+    <integer name="columns">4</integer>
+
+    <!-- Enable subtle background wallpaper (with dark scrim for high readability). Set true to enable. -->
+    <bool name="enable_wallpaper">false</bool>
+
+    <!-- Top-bar weather card (weather.com.cn, no API key). Shows today before 18:00, tomorrow after. -->
+    <bool name="enable_weather">true</bool>
+    <!-- Fixed city code: 101120111 = 山东省济南市历城区. Change it here to move the card elsewhere. -->
+    <string name="weather_city_code" translatable="false">101120111</string>
+</resources>

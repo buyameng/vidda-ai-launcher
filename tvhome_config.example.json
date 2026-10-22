@@ -1,0 +1,22 @@
+{
+  "gateway": {
+    "lan_url": "http://192.168.1.100:3425/v1",
+    "local_url": "http://127.0.0.1:3425/v1",
+    "api_key": "sk-your-ai-gateway-api-key",
+    "model": "google/models/gemini-3.8-flash"
+  },
+  "light": {
+    "base_url": "http://192.168.1.101/api/webhook",
+    "toggle_url": "http://192.168.1.101/api/webhook/tv_light_toggle",
+    "status_url": "http://192.168.1.101/api/webhook/tv_light_status",
+    "movie_url": "http://192.168.1.101/api/webhook/tv_light_movie",
+    "game_url": "http://192.168.1.101/api/webhook/tv_light_game"
+  },
+  "prompt": {
+    "system": "请严格遵守以下交互与格式规则：\n1. 当附带图片时，该图片即为用户正在观看的电视屏幕画面，请自然直接地回答关于画面的问题，用“现在屏幕上…”、“画面里…”等自然口吻，不要生硬提及“根据你提供的截图/图片”；\n2. 回答内容将由电视 TTS 引擎直接语音朗读，绝对不要输出任何 Markdown 标记（如 *、#、代码块、列表符号等）或 Emoji 表情符；\n3. 语音回答需精炼自然，控制在 2~4 句话（100字以内），直奔主题；\n4. 支持多轮对话，结合上下文精准理解追问；\n5. 若用户询问你的身份或模型，如实回答你的大模型名称与研发机构即可，不要自称其他名字。"
+  },
+  "conversation": {
+    "session_expire_seconds": 600,
+    "listen_timeout_seconds": 25
+  }
+}
