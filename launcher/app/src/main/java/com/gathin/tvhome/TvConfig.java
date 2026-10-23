@@ -9,6 +9,7 @@ import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
@@ -68,6 +69,20 @@ public final class TvConfig {
     private static String sApiKey = DEFAULT_API_KEY;
     private static String sModel = DEFAULT_MODEL;
 
+    // 降级保底网关 (DeepSeek Cloud)
+    private static boolean sFallbackEnabled = false;
+    private static String sFallbackName = "DeepSeek Cloud";
+    private static String sFallbackUrl = "https://api.deepseek.com/chat/completions";
+    private static String sFallbackApiKey = "";
+    private static String sFallbackModel = "deepseek-flash";
+    private static String sFallbackReasoningEffort = "high";
+    private static boolean sFallbackThinking = true;
+    private static int sFallbackMaxTokens = 512;
+
+    // 熔断与自愈机制：主服务若掉线，在 60 秒内优先使用保底网关，避免重复阻塞等待超时
+    private static volatile long sPrimaryFailTimestamp = 0L;
+    private static final long PRIMARY_RETRY_INTERVAL_MS = 60_000L;
+
     private static String sLightToggleUrl = DEFAULT_LIGHT_TOGGLE;
     private static String sLightStatusUrl = DEFAULT_LIGHT_STATUS;
     private static String sLightMovieUrl  = DEFAULT_LIGHT_MOVIE;
@@ -80,6 +95,37 @@ public final class TvConfig {
     // 跟踪配置文件路径与更新时间，支持零延迟热重载
     private static String sLoadedSourcePath = null;
     private static long sLastLoadedTimestamp = 0L;
+
+    /**
+     * 网关端点配置封装
+     */
+    public static class GatewayEndpoint {
+        public final String name;
+        public final String url;
+        public final String apiKey;
+        public final String model;
+        public final String reasoningEffort;
+        public final boolean thinkingEnabled;
+        public final int maxTokens;
+        public final boolean isFallback;
+
+        public GatewayEndpoint(String name, String url, String apiKey, String model,
+                               String reasoningEffort, boolean thinkingEnabled, int maxTokens, boolean isFallback) {
+            this.name = name;
+            this.url = url;
+            this.apiKey = apiKey;
+            this.model = model;
+            this.reasoningEffort = reasoningEffort;
+            this.thinkingEnabled = thinkingEnabled;
+            this.maxTokens = maxTokens;
+            this.isFallback = isFallback;
+        }
+
+        @Override
+        public String toString() {
+            return name + " (" + url + ", model=" + model + ")";
+        }
+    }
 
     private TvConfig() {}
 
@@ -98,6 +144,20 @@ public final class TvConfig {
      * 检查文件是否有更新并自动热重载
      */
     public static void checkReloadIfModified() {
+        File sdFile = new File("/sdcard/" + CONFIG_FILE_NAME);
+        File tmpFile = new File("/data/local/tmp/" + CONFIG_FILE_NAME);
+        if ((sdFile.exists() && sdFile.lastModified() > sLastLoadedTimestamp) ||
+            (tmpFile.exists() && tmpFile.lastModified() > sLastLoadedTimestamp)) {
+            synchronized (TvConfig.class) {
+                if ((sdFile.exists() && sdFile.lastModified() > sLastLoadedTimestamp) ||
+                    (tmpFile.exists() && tmpFile.lastModified() > sLastLoadedTimestamp)) {
+                    Log.i(TAG, "检测到外部新推送的配置文件，执行安全重载与迁入");
+                    loadConfig(true);
+                    return;
+                }
+            }
+        }
+
         if (sLoadedSourcePath != null) {
             File f = new File(sLoadedSourcePath);
             if (f.exists() && f.lastModified() > sLastLoadedTimestamp) {
@@ -118,8 +178,38 @@ public final class TvConfig {
         String jsonContent = null;
         String source = null;
 
-        // 1. 尝试从应用私有存储读取 (getFilesDir)
-        if (sContext != null) {
+        // 1. 优先检测外部公共存储新推送的文件 (/sdcard/ 或 /data/local/tmp/)，及时安全迁入并清理
+        File sdFile = new File("/sdcard/" + CONFIG_FILE_NAME);
+        File tmpFile = new File("/data/local/tmp/" + CONFIG_FILE_NAME);
+        File incomingFile = null;
+
+        if (sdFile.exists() && sdFile.canRead() && (force || sdFile.lastModified() > sLastLoadedTimestamp)) {
+            incomingFile = sdFile;
+        } else if (tmpFile.exists() && tmpFile.canRead() && (force || tmpFile.lastModified() > sLastLoadedTimestamp)) {
+            incomingFile = tmpFile;
+        }
+
+        if (incomingFile != null) {
+            String incomingContent = readFile(incomingFile);
+            if (incomingContent != null && !incomingContent.trim().isEmpty()) {
+                jsonContent = incomingContent;
+                source = incomingFile.getAbsolutePath();
+                sLastLoadedTimestamp = incomingFile.lastModified();
+                // 立即转存到应用私有沙盒存储 (/data/data/.../files/)
+                saveToInternalStorage(incomingContent);
+                // 若来源于外置公共存储，擦除以防止其他第三方应用窃取私有 Key
+                if (incomingFile.equals(sdFile)) {
+                    try {
+                        if (sdFile.delete()) {
+                            Log.i(TAG, "已成功将公共外置目录配置迁移至应用私有安全沙盒，并清理 /sdcard 明文以保护 Key 安全");
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            }
+        }
+
+        // 2. 尝试从应用私有存储读取 (getFilesDir)
+        if (jsonContent == null && sContext != null) {
             File appFile = new File(sContext.getFilesDir(), CONFIG_FILE_NAME);
             if (appFile.exists() && appFile.canRead()) {
                 jsonContent = readFile(appFile);
@@ -130,31 +220,7 @@ public final class TvConfig {
             }
         }
 
-        // 2. 尝试从外部公共存储读取 (/sdcard/tvhome_config.json)
-        if (jsonContent == null) {
-            File sdFile = new File("/sdcard/" + CONFIG_FILE_NAME);
-            if (sdFile.exists() && sdFile.canRead()) {
-                jsonContent = readFile(sdFile);
-                if (jsonContent != null) {
-                    source = sdFile.getAbsolutePath();
-                    sLastLoadedTimestamp = sdFile.lastModified();
-                }
-            }
-        }
-
-        // 3. 尝试从 /data/local/tmp 读取
-        if (jsonContent == null) {
-            File tmpFile = new File("/data/local/tmp/" + CONFIG_FILE_NAME);
-            if (tmpFile.exists() && tmpFile.canRead()) {
-                jsonContent = readFile(tmpFile);
-                if (jsonContent != null) {
-                    source = tmpFile.getAbsolutePath();
-                    sLastLoadedTimestamp = tmpFile.lastModified();
-                }
-            }
-        }
-
-        // 4. 尝试从 Assets 读取
+        // 3. 尝试从 Assets 读取
         if (jsonContent == null && sContext != null) {
             try (InputStream in = sContext.getAssets().open(CONFIG_FILE_NAME)) {
                 jsonContent = readStream(in);
@@ -170,6 +236,21 @@ public final class TvConfig {
         } else {
             Log.i(TAG, "未发现配置文件，使用系统属性/默认内置配置");
             loadFallbacksFromSystem();
+        }
+    }
+
+    private static void saveToInternalStorage(String content) {
+        if (sContext == null || content == null) return;
+        try {
+            File appFile = new File(sContext.getFilesDir(), CONFIG_FILE_NAME);
+            try (FileOutputStream fos = new FileOutputStream(appFile)) {
+                fos.write(content.getBytes(StandardCharsets.UTF_8));
+                fos.flush();
+            }
+            appFile.setReadable(true, true);
+            appFile.setWritable(true, true);
+        } catch (Throwable t) {
+            Log.w(TAG, "写入内部私有存储失败: " + t.getMessage());
         }
     }
 
@@ -189,6 +270,32 @@ public final class TvConfig {
                 if (!key.isEmpty() && !key.contains("your-ai-gateway-api-key")) sApiKey = key;
                 String model = gw.optString("model", "").trim();
                 if (!model.isEmpty()) sModel = model;
+            }
+
+            // 1.1 降级保底配置 (DeepSeek Cloud)
+            JSONObject fb = null;
+            if (gw != null && gw.has("fallback")) {
+                fb = gw.optJSONObject("fallback");
+            } else if (root.has("fallback")) {
+                fb = root.optJSONObject("fallback");
+            }
+
+            if (fb != null) {
+                sFallbackEnabled = fb.optBoolean("enabled", true);
+                sFallbackName = fb.optString("name", "DeepSeek Cloud");
+                String fbUrl = fb.optString("url", "").trim();
+                if (!fbUrl.isEmpty()) sFallbackUrl = fbUrl;
+                String fbKey = fb.optString("api_key", "").trim();
+                if (!fbKey.isEmpty() && !fbKey.contains("your-deepseek-api-key")) {
+                    sFallbackApiKey = fbKey;
+                }
+                String fbModel = fb.optString("model", "").trim();
+                if (!fbModel.isEmpty()) sFallbackModel = fbModel;
+                String fbReasoning = fb.optString("reasoning_effort", "").trim();
+                if (!fbReasoning.isEmpty()) sFallbackReasoningEffort = fbReasoning;
+                sFallbackThinking = fb.optBoolean("thinking", true);
+                int maxTok = fb.optInt("max_tokens", 0);
+                if (maxTok > 0) sFallbackMaxTokens = maxTok;
             }
 
             // 2. 智能灯具配置
@@ -362,42 +469,139 @@ public final class TvConfig {
     }
 
     /**
-     * 获取 AI 候选网关地址列表 (含上次成功优先机制)
+     * 网关成功响应回调：若为主网关成功，重置主服务熔断状态
      */
-    public static List<String> getCandidateUrls(String lastWorkingUrl) {
-        checkReloadIfModified();
-        Set<String> candidates = new LinkedHashSet<>();
-
-        // 1. 上次成功地址置顶
-        if (lastWorkingUrl != null && !lastWorkingUrl.trim().isEmpty()) {
-            candidates.add(normalizeUrl(lastWorkingUrl));
+    public static void onEndpointSuccess(GatewayEndpoint endpoint) {
+        if (endpoint != null && !endpoint.isFallback) {
+            if (sPrimaryFailTimestamp > 0) {
+                Log.i(TAG, "主 AI 网关 (" + endpoint.url + ") 已恢复连通，熔断器复位");
+            }
+            sPrimaryFailTimestamp = 0L;
         }
+    }
 
-        // 2. Settings.Global tvhome_ai_url 动态配置
+    /**
+     * 网关访问失败回调：若主服务失败，记录熔断时间戳开启 60 秒冷却
+     */
+    public static void onEndpointFailure(GatewayEndpoint endpoint) {
+        if (endpoint != null && !endpoint.isFallback) {
+            sPrimaryFailTimestamp = System.currentTimeMillis();
+            Log.w(TAG, "主 AI 网关 (" + endpoint.url + ") 访问异常，开启 60 秒故障转移冷却（优先调度保底网关）");
+        }
+    }
+
+    /**
+     * 获取支持降级保底与智能熔断的网关候选列表
+     */
+    public static List<GatewayEndpoint> getCandidateEndpoints() {
+        checkReloadIfModified();
+        List<GatewayEndpoint> primaries = new ArrayList<>();
+        List<GatewayEndpoint> fallbacks = new ArrayList<>();
+
+        // 1. 系统设置动态配置 (Settings.Global tvhome_ai_url) 或主 LAN 网关
+        String activePrimaryUrl = null;
         if (sContext != null) {
             try {
                 String globalUrl = Settings.Global.getString(sContext.getContentResolver(), "tvhome_ai_url");
                 if (globalUrl != null && !globalUrl.trim().isEmpty()) {
-                    candidates.add(normalizeUrl(globalUrl));
+                    activePrimaryUrl = normalizeUrl(globalUrl);
                 }
             } catch (Throwable ignored) {}
         }
-
-        // 3. 配置文件设定的主 LAN 网关
-        if (sLanUrl != null && !sLanUrl.trim().isEmpty()) {
-            candidates.add(normalizeUrl(sLanUrl));
+        if (activePrimaryUrl == null && sLanUrl != null && !sLanUrl.trim().isEmpty()) {
+            activePrimaryUrl = normalizeUrl(sLanUrl);
         }
 
-        // 4. 本地回环 Loopback
+        if (activePrimaryUrl != null) {
+            primaries.add(new GatewayEndpoint(
+                "Primary Gateway",
+                activePrimaryUrl,
+                getAiApiKey(),
+                getAiModel(),
+                "low",
+                false,
+                256,
+                false
+            ));
+        }
+
+        // 2. 本地回环 Loopback (若不同于 activePrimaryUrl)
         if (sLocalUrl != null && !sLocalUrl.trim().isEmpty()) {
-            candidates.add(normalizeUrl(sLocalUrl));
+            String normLocal = normalizeUrl(sLocalUrl);
+            if (activePrimaryUrl == null || !activePrimaryUrl.equals(normLocal)) {
+                primaries.add(new GatewayEndpoint(
+                    "Local Loopback",
+                    normLocal,
+                    getAiApiKey(),
+                    getAiModel(),
+                    "low",
+                    false,
+                    256,
+                    false
+                ));
+            }
         }
 
-        return new ArrayList<>(candidates);
+        // 3. 降级保底网关 (DeepSeek Cloud)
+        if (sFallbackEnabled && sFallbackApiKey != null && !sFallbackApiKey.isEmpty()) {
+            fallbacks.add(new GatewayEndpoint(
+                (sFallbackName != null && !sFallbackName.isEmpty()) ? sFallbackName : "DeepSeek Cloud",
+                normalizeUrl(sFallbackUrl),
+                sFallbackApiKey,
+                (sFallbackModel != null && !sFallbackModel.isEmpty()) ? sFallbackModel : "deepseek-flash",
+                sFallbackReasoningEffort,
+                sFallbackThinking,
+                sFallbackMaxTokens > 0 ? sFallbackMaxTokens : 512,
+                true
+            ));
+        }
+
+        // 4. 熔断与自愈排序
+        List<GatewayEndpoint> result = new ArrayList<>();
+        long now = System.currentTimeMillis();
+        boolean primaryCircuitOpen = (sPrimaryFailTimestamp > 0 && (now - sPrimaryFailTimestamp < PRIMARY_RETRY_INTERVAL_MS));
+
+        if (primaryCircuitOpen && !fallbacks.isEmpty()) {
+            // 主服务此前失联且处于 60s 冷却期内：优先使用保底网关，避免每轮对话阻塞等待主服务超时
+            result.addAll(fallbacks);
+            result.addAll(primaries);
+        } else {
+            // 正常状态或冷却期已过：优先尝试主服务（探测自愈），失败再走保底网关
+            result.addAll(primaries);
+            result.addAll(fallbacks);
+        }
+
+        if (result.isEmpty()) {
+            result.add(new GatewayEndpoint(
+                "Default Loopback",
+                DEFAULT_LOCAL_GATEWAY + "/chat/completions",
+                "",
+                DEFAULT_MODEL,
+                "low",
+                false,
+                256,
+                false
+            ));
+        }
+
+        return result;
+    }
+
+    /**
+     * 获取 AI 候选网关地址列表 (兼容旧版调用)
+     */
+    public static List<String> getCandidateUrls(String lastWorkingUrl) {
+        List<String> list = new ArrayList<>();
+        for (GatewayEndpoint ep : getCandidateEndpoints()) {
+            if (!list.contains(ep.url)) {
+                list.add(ep.url);
+            }
+        }
+        return list;
     }
 
     private static String normalizeUrl(String raw) {
-        if (raw == null) return DEFAULT_LAN_GATEWAY + "/chat/completions";
+        if (raw == null || raw.trim().isEmpty()) return DEFAULT_LAN_GATEWAY + "/chat/completions";
         String trimmed = raw.trim();
         if (trimmed.endsWith("/chat/completions")) {
             return trimmed;

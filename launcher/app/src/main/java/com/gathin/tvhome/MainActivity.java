@@ -20,6 +20,7 @@ import android.provider.Settings;
 import android.text.format.DateFormat;
 import android.util.Log;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.animation.AnimationUtils;
@@ -249,8 +250,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         heroName.setAlpha(0f);
         ambient.setAlpha(0f);
         // Read these before reload(): rebinding can move focus to the first tile and overwrite them.
-        final String returnKey = lastFocusedKey;
-        final int returnSlot = lastFocused;
+        // 若进程被杀重启导致静态变量被清空，从 SharedPreferences 持久化读取，避免丢失上次停留焦点
+        String returnKey = lastFocusedKey;
+        int returnSlot = lastFocused;
+        if (returnKey == null) {
+            android.content.SharedPreferences sp = getSharedPreferences("tvhome_prefs", Context.MODE_PRIVATE);
+            returnKey = sp.getString("last_focused_key", null);
+            returnSlot = sp.getInt("last_focused_slot", 0);
+            lastFocusedKey = returnKey;
+            lastFocused = returnSlot;
+        }
+        final String effectiveKey = returnKey;
+        final int effectiveSlot = returnSlot;
         adapter.reload();
         if (isFirstResume) {
             grid.scheduleLayoutAnimation();
@@ -261,12 +272,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         weather.refreshIfStale();
         TvLightController.refreshStatusAsync();
         handler.postDelayed(minuteTick, MINUTE_MS);
+        resetIdleTimer();
 
         // Return to the app we left from, or the same slot if that app is gone. Always refocus: after
         // reload() the view that holds focus may no longer show the app it had.
         grid.post(() -> {
-            int pos = adapter.positionOf(returnKey);
-            focusTile(pos >= 0 ? pos : returnSlot);
+            int pos = adapter.positionOf(effectiveKey);
+            focusTile(pos >= 0 ? pos : effectiveSlot);
         });
     }
 
@@ -274,14 +286,62 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     protected void onPause() {
         super.onPause();
         handler.removeCallbacks(minuteTick);
+        idleHandler.removeCallbacks(idleScreensaverRunnable);
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        idleHandler.removeCallbacks(idleScreensaverRunnable);
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         if (cm != null) cm.unregisterNetworkCallback(networkCallback);
         if (weather != null) weather.stop();
+    }
+
+    // ---- Idle screensaver timer -----------------------------------------------------------------
+    private static final long DEFAULT_IDLE_TIMEOUT_MS = 15 * 60 * 1000L; // 15 minutes
+    private final Handler idleHandler = new Handler(Looper.getMainLooper());
+    private final Runnable idleScreensaverRunnable = new Runnable() {
+        @Override
+        public void run() {
+            Log.i("MainActivity", "桌面空闲超时 (" + getIdleTimeoutMs() + "ms)，启动防烧屏夜光漂移时钟屏保");
+            ClockScreensaverActivity.start(MainActivity.this);
+        }
+    };
+
+    private long getIdleTimeoutMs() {
+        long timeout = DEFAULT_IDLE_TIMEOUT_MS;
+        try {
+            int sleepTimeout = Settings.Secure.getInt(getContentResolver(), "sleep_timeout", -1);
+            if (sleepTimeout > 0 && sleepTimeout <= 24 * 3600 * 1000) {
+                timeout = sleepTimeout;
+            }
+        } catch (Throwable ignored) {
+        }
+        return timeout;
+    }
+
+    private void resetIdleTimer() {
+        idleHandler.removeCallbacks(idleScreensaverRunnable);
+        idleHandler.postDelayed(idleScreensaverRunnable, getIdleTimeoutMs());
+    }
+
+    @Override
+    public void onUserInteraction() {
+        super.onUserInteraction();
+        resetIdleTimer();
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        resetIdleTimer();
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        resetIdleTimer();
+        return super.dispatchTouchEvent(ev);
     }
 
     @Override
@@ -303,6 +363,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     public void onTileFocused(int position, View card) {
         lastFocused = position;
         lastFocusedKey = adapter.keyAt(position);
+        if (lastFocusedKey != null) {
+            getSharedPreferences("tvhome_prefs", Context.MODE_PRIVATE)
+                    .edit()
+                    .putString("last_focused_key", lastFocusedKey)
+                    .putInt("last_focused_slot", position)
+                    .apply();
+        }
         // Tile rect in root coordinates, using layout positions (ignores the scale animation).
         Rect r = new Rect(0, 0, card.getWidth(), card.getHeight());
         root.offsetDescendantRectToMyCoords(card, r);

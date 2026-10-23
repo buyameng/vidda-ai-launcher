@@ -75,6 +75,10 @@ public class AiClient {
         }
     }
 
+    public static List<TvConfig.GatewayEndpoint> getCandidateEndpoints() {
+        return TvConfig.getCandidateEndpoints();
+    }
+
     public static List<String> getCandidateUrls() {
         return TvConfig.getCandidateUrls(sLastWorkingUrl);
     }
@@ -107,9 +111,7 @@ public class AiClient {
         final String histText = (historyText != null && !historyText.trim().isEmpty()) ? historyText : userMessage;
         final int currentRequestId = sRequestIdGenerator.incrementAndGet();
 
-        final List<String> candidateUrls = getCandidateUrls();
-        final String apiKey = getApiKey();
-        final String modelName = getModel();
+        final List<TvConfig.GatewayEndpoint> candidateEndpoints = getCandidateEndpoints();
 
         sNetworkExecutor.execute(() -> {
             long now = System.currentTimeMillis();
@@ -135,18 +137,10 @@ public class AiClient {
                 return;
             }
 
-            // 构建请求 JSON Payload
-            byte[] bodyBytes;
+            // 构建通用消息列表
             final boolean hasImage = (jpegBytes != null && jpegBytes.length > 0);
+            JSONArray messages = new JSONArray();
             try {
-                JSONObject payload = new JSONObject();
-                payload.put("model", modelName);
-                payload.put("stream", false);
-                payload.put("reasoning_effort", "low");
-                payload.put("max_tokens", 160);
-
-                JSONArray messages = new JSONArray();
-
                 // 系统提示词：从配置中心 TvConfig 动态获取（支持热重载）
                 JSONObject sysMsg = new JSONObject();
                 sysMsg.put("role", "system");
@@ -186,19 +180,16 @@ public class AiClient {
                     currentUsrMsg.put("content", userMessage);
                 }
                 messages.put(currentUsrMsg);
-
-                payload.put("messages", messages);
-                bodyBytes = payload.toString().getBytes(StandardCharsets.UTF_8);
             } catch (Throwable t) {
                 Log.e(TAG, "构建请求 JSON 异常", t);
                 if (callback != null) callback.onError("数据格式异常");
                 return;
             }
 
-            // 循环尝试候选网关地址 (Failover 机制)
+            // 循环尝试候选网关端点 (支持智能熔断与多级保底)
             Throwable lastException = null;
-            for (int i = 0; i < candidateUrls.size(); i++) {
-                String targetUrl = candidateUrls.get(i);
+            for (int i = 0; i < candidateEndpoints.size(); i++) {
+                TvConfig.GatewayEndpoint endpoint = candidateEndpoints.get(i);
                 if (currentRequestId != sRequestIdGenerator.get()) {
                     Log.i(TAG, "【丢弃过期请求】requestId: " + currentRequestId);
                     return;
@@ -206,17 +197,43 @@ public class AiClient {
 
                 HttpURLConnection conn = null;
                 try {
-                    Log.i(TAG, "正在请求 AI 网关 [" + (i + 1) + "/" + candidateUrls.size() + "]: " + targetUrl);
-                    URL url = new URL(targetUrl);
+                    Log.i(TAG, "正在请求 AI 网关 [" + (i + 1) + "/" + candidateEndpoints.size() + "] (" +
+                            endpoint.name + "): " + endpoint.url + " [模型: " + endpoint.model + "]");
+
+                    // 根据当前端点特性动态封装 Payload (支持 DeepSeek reasoning_effort 与 thinking)
+                    JSONObject payload = new JSONObject();
+                    payload.put("model", endpoint.model);
+                    payload.put("stream", false);
+                    if (endpoint.reasoningEffort != null && !endpoint.reasoningEffort.isEmpty()) {
+                        payload.put("reasoning_effort", endpoint.reasoningEffort);
+                    }
+                    if (endpoint.thinkingEnabled) {
+                        JSONObject thinking = new JSONObject();
+                        thinking.put("type", "enabled");
+                        payload.put("thinking", thinking);
+                    }
+                    payload.put("max_tokens", endpoint.maxTokens > 0 ? endpoint.maxTokens : 256);
+                    payload.put("messages", messages);
+
+                    byte[] bodyBytes = payload.toString().getBytes(StandardCharsets.UTF_8);
+
+                    URL url = new URL(endpoint.url);
                     conn = (HttpURLConnection) url.openConnection();
                     conn.setRequestMethod("POST");
                     conn.setRequestProperty("Content-Type", "application/json");
-                    if (apiKey != null && !apiKey.isEmpty()) {
-                        conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+                    if (endpoint.apiKey != null && !endpoint.apiKey.isEmpty()) {
+                        conn.setRequestProperty("Authorization", "Bearer " + endpoint.apiKey);
                     }
-                    // 连接超时设为 3 秒，若不可达迅速切换至下一个候选网关
-                    conn.setConnectTimeout(3000);
-                    conn.setReadTimeout(25000);
+
+                    if (endpoint.isFallback) {
+                        // 云端保底网关 (DeepSeek)：连接超时 5 秒，读取 30 秒
+                        conn.setConnectTimeout(5000);
+                        conn.setReadTimeout(30000);
+                    } else {
+                        // 局域网主网关 (Win)：连接超时 2.5 秒，若掉线迅速无缝降级至保底网关
+                        conn.setConnectTimeout(2500);
+                        conn.setReadTimeout(25000);
+                    }
                     conn.setDoOutput(true);
 
                     try (OutputStream os = conn.getOutputStream()) {
@@ -246,10 +263,11 @@ public class AiClient {
                             JSONObject msg = choices.getJSONObject(0).optJSONObject("message");
                             String content = (msg != null) ? msg.optString("content", "") : "";
                             String cleanReply = cleanForTTS(content);
-                            Log.i(TAG, "AI 网关 (" + targetUrl + ") 回复: " + cleanReply);
+                            Log.i(TAG, "AI 网关 [" + endpoint.name + "] (" + endpoint.url + ") 回复: " + cleanReply);
 
-                            // 缓存该成功连通的 URL 为下一次优先网关
-                            sLastWorkingUrl = targetUrl;
+                            // 通知状态复位并更新
+                            TvConfig.onEndpointSuccess(endpoint);
+                            sLastWorkingUrl = endpoint.url;
 
                             // 记录历史
                             synchronized (AiClient.class) {
@@ -278,12 +296,14 @@ public class AiClient {
                         }
                     }
 
-                    Log.w(TAG, "网关响应非200: HTTP " + code + ", 响应: " + response);
+                    Log.w(TAG, "网关 [" + endpoint.name + "] 响应非200: HTTP " + code + ", 响应: " + response);
+                    TvConfig.onEndpointFailure(endpoint);
                     lastException = new RuntimeException("HTTP " + code);
 
                 } catch (Throwable t) {
+                    TvConfig.onEndpointFailure(endpoint);
                     lastException = t;
-                    Log.w(TAG, "网关连接失败: " + targetUrl + " (" + t.getMessage() + ")，准备尝试下一个候选地址...");
+                    Log.w(TAG, "网关 [" + endpoint.name + "] 访问失败: " + endpoint.url + " (" + t.getMessage() + ")，准备降级尝试下一个候选网关...");
                 } finally {
                     if (conn != null) {
                         try { conn.disconnect(); } catch (Throwable ignored) {}

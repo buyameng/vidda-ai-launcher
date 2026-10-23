@@ -448,6 +448,13 @@ public class AiVoiceBridgeService extends Service {
             writeLog("onSpeechState: " + state + " (active=" + mIsConversationActive + ")");
             long nowElapsed = SystemClock.elapsedRealtime();
 
+            // 若当前处于非活跃状态，全双工常驻切片(30)绝不能被当作唤醒，直接拦截关麦，防止无人呼唤时后台窃听或误弹窗
+            if (!mIsConversationActive && state == STATE_RECORD_START_FULLDUPLEX) {
+                writeLog("【压制非活跃全双工】当前处于非活跃状态，拒绝全双工切片 (state=30) 并强制关麦");
+                stopSpeechCoreListening();
+                return;
+            }
+
             if (state == STATE_RECORD_START ||
                 state == STATE_RECORD_START_MICARRAY ||
                 state == STATE_RECORD_START_FULLDUPLEX) {
@@ -468,6 +475,7 @@ public class AiVoiceBridgeService extends Service {
                     mIsConversationActive = true;
                     requestMediaPause();
                 }
+                com.gathin.tvhome.ClockScreensaverActivity.dismiss();
 
                 // 唤醒瞬间触发静默异步预抓帧（避开自身文字浮层遮挡）
                 if (!mHasPreCapturedForTurn) {
@@ -616,6 +624,10 @@ public class AiVoiceBridgeService extends Service {
         @Override
         public boolean onVerbalCommand(String command) throws RemoteException {
             writeLog("onVerbalCommand: " + command);
+            if (handleScreensaverCommand(command)) {
+                writeLog("onVerbalCommand 拦截并处理屏保指令: " + command);
+                return true;
+            }
             if (handleLightControlCommand(command)) {
                 writeLog("onVerbalCommand 拦截并处理氛围灯指令: " + command);
                 return true;
@@ -752,6 +764,60 @@ public class AiVoiceBridgeService extends Service {
             if (norm.equals(ww)) return true;
         }
         return false;
+    }
+
+    /**
+     * 判断是否为进入屏保/休眠指令
+     */
+    private boolean isScreensaverCommand(String text) {
+        if (text == null) return false;
+        String t = PATTERN_PUNCT_AND_SPACE.matcher(text).replaceAll("");
+        if (t.isEmpty()) return false;
+
+        if (t.contains("退出") || t.contains("关闭屏保") || t.contains("不看屏保")) {
+            return false;
+        }
+
+        if (t.equals("屏保") || t.equals("打开屏保") || t.equals("进入屏保") ||
+                t.equals("开启屏保") || t.equals("时钟屏保") || t.equals("防烧屏屏保") ||
+                t.equals("时钟") || t.equals("打开时钟") ||
+                t.equals("休眠") || t.equals("进入休眠") || t.equals("休眠模式") ||
+                t.equals("睡眠") || t.equals("进入睡眠") ||
+                t.equals("关屏") || t.equals("息屏") || t.equals("关闭屏幕") ||
+                t.equals("息屏休眠") || t.equals("关闭电视屏幕") ||
+                t.equals("去睡觉吧") || t.equals("我要睡觉了")) {
+            return true;
+        }
+
+        if (t.length() <= 10) {
+            if ((t.contains("屏保") || t.contains("休眠") || t.contains("息屏") || t.contains("关屏")) &&
+                    !t.contains("怎么") && !t.contains("如何") && !t.contains("为什么") && !t.contains("什么是")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean handleScreensaverCommand(String rawText) {
+        if (!isScreensaverCommand(rawText)) return false;
+        writeLog("【进入屏保指令】用户说: " + rawText + "，立即唤起防烧屏夜光时钟屏保");
+        mSessionEpoch.incrementAndGet();
+        mIsConversationActive = false;
+        mIsProcessing = false;
+        mHandler.removeCallbacks(mListeningTimeoutRunnable);
+        mHandler.removeCallbacks(mRestartListenRunnable);
+        mHandler.removeCallbacks(mRestartListenSliceRunnable);
+        mHandler.removeCallbacks(mCheckSliceSilenceRunnable);
+        if (mOverlay != null) {
+            mOverlay.dismiss(false);
+        }
+        stopSpeechCoreListening();
+        try {
+            com.gathin.tvhome.ClockScreensaverActivity.start(this);
+        } catch (Exception e) {
+            writeLog("唤起屏保失败: " + e.getMessage());
+        }
+        return true;
     }
 
     /**
@@ -939,11 +1005,6 @@ public class AiVoiceBridgeService extends Service {
         String rawTrimmed = query.trim();
         if (rawTrimmed.isEmpty()) return;
 
-        if (!mIsConversationActive) {
-            mIsConversationActive = true;
-            requestMediaPause();
-        }
-
         if (isExitCommand(rawTrimmed)) {
             handleVoiceExit(rawTrimmed);
             return;
@@ -951,6 +1012,7 @@ public class AiVoiceBridgeService extends Service {
 
         // 1. 判断是否为单纯呼唤唤醒词（如“你好小智”、“hi，小智”、“海信小智”、“小智”等，不带具体提问内容）
         if (isPureWakeWord(rawTrimmed)) {
+            com.gathin.tvhome.ClockScreensaverActivity.dismiss();
             writeLog("【单纯唤醒词】唤醒激活并友好回应: " + rawTrimmed);
             mIsConversationActive = true;
             if (mOverlay != null) {
@@ -963,6 +1025,7 @@ public class AiVoiceBridgeService extends Service {
         boolean hadExplicitWakeWord = startsWithWakeWord(rawTrimmed);
         String trimmed = stripWakeWord(rawTrimmed);
         if (trimmed.isEmpty()) {
+            com.gathin.tvhome.ClockScreensaverActivity.dismiss();
             writeLog("去除唤醒词后提问内容为空，友好回应并等待提问: " + rawTrimmed);
             mIsConversationActive = true;
             if (mOverlay != null) {
@@ -977,6 +1040,14 @@ public class AiVoiceBridgeService extends Service {
             return;
         }
 
+        // 屏保/休眠控制指令拦截，不论是近场按键还是远场指令，直接拦截执行！
+        if (handleScreensaverCommand(rawTrimmed) || handleScreensaverCommand(trimmed)) {
+            writeLog("检测到屏保/休眠控制指令，优先唤起屏保: " + rawTrimmed);
+            mIsProcessing = false;
+            mHandler.removeCallbacks(mWatchdogResetProcessing);
+            return;
+        }
+
         // 氛围灯控制指令优先级最高，不论是近场按键还是远场指令，直接拦截执行！
         if (handleLightControlCommand(trimmed)) {
             writeLog("检测到氛围灯控制指令，优先执行: " + trimmed);
@@ -984,6 +1055,8 @@ public class AiVoiceBridgeService extends Service {
             mHandler.removeCallbacks(mWatchdogResetProcessing);
             return;
         }
+
+        com.gathin.tvhome.ClockScreensaverActivity.dismiss();
 
         long nowElapsed = SystemClock.elapsedRealtime();
         if (!mIsConversationActive) {
@@ -1496,10 +1569,48 @@ public class AiVoiceBridgeService extends Service {
         }
         mHandler.postDelayed(() -> {
             try {
-                Intent launchIntent = getPackageManager().getLaunchIntentForPackage("com.bilibili.tv");
-                if (launchIntent != null) {
-                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    startActivity(launchIntent);
+                // 常见 TV 版 B站 包名候选：官方云视听小电视与常见第三方 (BBLL 等)
+                String targetPkg = null;
+                if (isPackageInstalled("com.bilibili.tv")) {
+                    targetPkg = "com.bilibili.tv";
+                } else if (isPackageInstalled("com.videobox.bbll")) {
+                    targetPkg = "com.videobox.bbll";
+                } else if (isPackageInstalled("org.bbll")) {
+                    targetPkg = "org.bbll";
+                } else if (isPackageInstalled("tv.danmaku.bili")) {
+                    targetPkg = "tv.danmaku.bili";
+                }
+
+                boolean launched = false;
+                if (targetPkg != null) {
+                    // 1. 尝试使用 B站 TV 版标准 DeepLink 协议拉起搜索
+                    Intent deepLinkIntent = new Intent(Intent.ACTION_VIEW);
+                    deepLinkIntent.setData(Uri.parse("bilibilitv://search?keyword=" + Uri.encode(keyword)));
+                    deepLinkIntent.setPackage(targetPkg);
+                    deepLinkIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    if (deepLinkIntent.resolveActivity(getPackageManager()) != null) {
+                        startActivity(deepLinkIntent);
+                        launched = true;
+                    }
+                }
+
+                // 2. 若 DeepLink 协议未命中，回退到 LaunchIntent 并附加多种搜索 Extra 参数兜底
+                if (!launched) {
+                    String pkg = (targetPkg != null) ? targetPkg : "com.bilibili.tv";
+                    Intent launchIntent = getPackageManager().getLaunchIntentForPackage(pkg);
+                    if (launchIntent != null) {
+                        launchIntent.putExtra("keyword", keyword);
+                        launchIntent.putExtra("key", keyword);
+                        launchIntent.putExtra("query", keyword);
+                        launchIntent.putExtra("search_text", keyword);
+                        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                        startActivity(launchIntent);
+                        launched = true;
+                    }
+                }
+
+                if (!launched) {
+                    writeLog("未找到可拉起的哔哩哔哩应用");
                 }
                 exitConversationAndStopListening();
             } catch (Exception e) {

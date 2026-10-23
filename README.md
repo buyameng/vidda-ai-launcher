@@ -84,12 +84,12 @@ flowchart TB
 - **Apple TV / tvOS Aesthetic**: Pitch-black backdrop, rounded frosted-glass Dock bar holding primary streaming applications, and a slide-up full application grid.
 - **Physical Spring Focus Animation (`SpringAnimation`)**: A single rounded glass highlight springs smoothly between tiles, eliminating the rigid, flickering borders common in generic TV launchers.
 - **Dynamic Ambient Color Extraction (`ambientColorAt`)**: Samples the vivid dominant color from the focused application's banner/icon, smoothly projecting a matching ambient glow behind the title shelf.
-- **Anti-Burn-In Clock Screensaver (`ClockDream`)**: Designed for OLED and large TVs; a minimalist thin font drifts gently across the screen to prevent static pixel retention.
+- **Anti-Burn-In Clock Screensaver (`ClockDream` / `ClockScreensaverActivity`)**: Designed for OLED and large TVs; a minimalist thin font drifts gently across the screen to prevent static pixel retention. Automatically activates after 15 minutes of desktop idle time, and wakes up instantly with zero lag upon remote keypress or voice interaction. Also supports instant voice activation ("打开屏保", "休眠").
 - **Dynamic Network Pill**: Real-time detection and display of Wi-Fi SSID and Ethernet status with direct navigation to system settings.
 
 ### 2.2 Multimodal AI Client (`AiClient`)
-- **OpenAI-Compatible Communication**: Connects directly to local forwarders or cloud AI gateways, optimized for Gemini 3.8 Flash and similar vision models.
-- **Intelligent Multi-Tier Failover**: Automatically cascades through candidates: verified working URL → Global Settings → LAN Gateway → Local Loopback (`127.0.0.1:3425`).
+- **OpenAI-Compatible Communication**: Connects directly to local forwarders or cloud AI gateways, optimized for Gemini 3.8 Flash, DeepSeek Flash, and similar vision/chat models.
+- **Intelligent Multi-Tier Failover & Cloud Fallback**: Automatically cascades through candidates: verified working URL → Global Settings → LAN Gateway → Local Loopback → Cloud Fallback (e.g., DeepSeek) with automatic circuit-breaking when the primary gateway is offline.
 - **Request Generation ID (`sRequestIdGenerator`)**: Drops stale in-flight responses immediately when users re-wake or interrupt, avoiding cross-talk or outdated spoken output.
 - **Pure TTS Output Sanitization**: High-performance pre-compiled regex filters strip Markdown markers (`#`, `*`, code blocks, lists) and emoji symbols before passing text to the TV's TTS voice engine.
 - **Lightweight Multi-Turn Memory**: Implements a "current-turn image, history text-only" pattern, shedding large Base64 image payloads from past rounds to keep total context size under 4 KB.

@@ -121,38 +121,6 @@ adb -s "${TV}" shell appops set --user 0 com.gathin.tvhome SYSTEM_ALERT_WINDOW a
 adb -s "${TV}" shell appops set 10078 SYSTEM_ALERT_WINDOW allow 2>/dev/null || true
 adb -s "${TV}" shell appops set com.gathin.tvhome PROJECT_MEDIA allow 2>/dev/null || true
 
-echo "配置本地局域网转发与端口反向通道..."
-HOST_LAN_IP=$(python3 -c "
-import socket
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-try:
-    s.connect(('${TV_HOST}', 5555))
-    print(s.getsockname()[0])
-except:
-    print('127.0.0.1')
-finally:
-    s.close()
-")
-echo "宿主机局域网 IP: ${HOST_LAN_IP}"
-
-# 确保宿主机 3425 端口对局域网开放并转发至 127.0.0.1:3425
-if ! nc -z "${HOST_LAN_IP}" 3425 2>/dev/null; then
-    echo "启动宿主机局域网 3425 端口代理 -> 127.0.0.1:3425..."
-    FORWARDER_SCRIPT="${SCRIPT_DIR}/tools/forwarder.py"
-    if [ ! -f "${FORWARDER_SCRIPT}" ]; then
-        FORWARDER_SCRIPT="${SCRIPT_DIR}/repo/tools/forwarder.py"
-    fi
-    if [ -f "${FORWARDER_SCRIPT}" ]; then
-        nohup python3 "${FORWARDER_SCRIPT}" >/dev/null 2>&1 &
-        sleep 0.5
-    fi
-fi
-
-adb -s "${TV}" reverse tcp:3425 tcp:3425 2>/dev/null || true
-adb -s "${TV}" shell settings put global tvhome_ai_url "http://${HOST_LAN_IP}:3425/v1" 2>/dev/null || true
-adb -s "${TV}" shell settings put global tvhome_ai_fallback_url "http://127.0.0.1:3425/v1" 2>/dev/null || true
-adb -s "${TV}" shell settings put global tvhome_weather_city_code "101120111" 2>/dev/null || true
-
 echo "同步私有配置文件至电视设备存储..."
 CFG_FILE=""
 if [ -f "${SCRIPT_DIR}/tvhome_config.json" ]; then
@@ -161,9 +129,19 @@ elif [ -f "${REPO_DIR}/tvhome_config.json" ]; then
     CFG_FILE="${REPO_DIR}/tvhome_config.json"
 fi
 
+TARGET_AI_URL=""
 if [ -n "${CFG_FILE}" ]; then
     adb -s "${TV}" push "${CFG_FILE}" /sdcard/tvhome_config.json 2>/dev/null || true
     adb -s "${TV}" push "${CFG_FILE}" /data/local/tmp/tvhome_config.json 2>/dev/null || true
+    TARGET_AI_URL=$(python3 -c "
+import json
+try:
+    with open('${CFG_FILE}') as f:
+        cfg = json.load(f)
+    print(cfg.get('gateway', {}).get('lan_url', '').strip())
+except Exception:
+    pass
+")
     python3 -c "
 import json, subprocess
 try:
@@ -187,6 +165,26 @@ except Exception:
     pass
 " 2>/dev/null || true
 fi
+
+if [ -n "${TARGET_AI_URL}" ]; then
+    echo "配置电视 AI 网关为配置文件目标: ${TARGET_AI_URL}"
+    adb -s "${TV}" shell settings put global tvhome_ai_url "${TARGET_AI_URL}" 2>/dev/null || true
+else
+    HOST_LAN_IP=$(python3 -c "
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+try:
+    s.connect(('${TV_HOST}', 5555))
+    print(s.getsockname()[0])
+except:
+    print('127.0.0.1')
+finally:
+    s.close()
+")
+    echo "未配置 lan_url，回退使用宿主机 IP: ${HOST_LAN_IP}"
+    adb -s "${TV}" shell settings put global tvhome_ai_url "http://${HOST_LAN_IP}:3425/v1" 2>/dev/null || true
+fi
+adb -s "${TV}" shell settings put global tvhome_weather_city_code "101120111" 2>/dev/null || true
 
 echo "关闭系统强制全双工常驻拾音（由 AiVoiceBridgeService 精准托管多轮拾音与退出）..."
 adb -s "${TV}" shell am start -d "hispeech://aiarea/duplex?entertype=0\&column=personalization\&cardCode=FULL_DUPLEX\&switch=0" >/dev/null 2>&1 || true
@@ -229,10 +227,15 @@ adb -s "${TV}" shell setprop sys.vt.start_u0_component com.gathin.tvhome/com.gat
 adb -s "${TV}" shell cmd package set-home-activity --user 0 com.gathin.tvhome/.MainActivity
 
 echo ""
-echo "=== 6. 配置 ClockDream 防烧屏时钟屏保 ==="
-adb -s "${TV}" shell settings put secure screensaver_components com.gathin.tvhome/.ClockDream
-adb -s "${TV}" shell settings put secure screensaver_enabled 1
-adb -s "${TV}" shell settings put secure screensaver_activate_on_sleep 1
+echo "=== 6. 配置 ClockDream 防烧屏时钟屏保与空闲休眠 ==="
+adb -s "${TV}" shell settings put secure screensaver_components com.gathin.tvhome/.ClockDream 2>/dev/null || true
+adb -s "${TV}" shell settings put secure screensaver_default_component com.gathin.tvhome/.ClockDream 2>/dev/null || true
+adb -s "${TV}" shell settings put secure screensaver_enabled 1 2>/dev/null || true
+adb -s "${TV}" shell settings put secure screensaver_activate_on_sleep 1 2>/dev/null || true
+SLEEP_MIN="${SLEEP_TIMEOUT_MIN:-15}"
+echo "设置全局空闲超时为 ${SLEEP_MIN} 分钟自动进入防烧屏时钟屏保..."
+adb -s "${TV}" shell settings put secure sleep_timeout "$(( SLEEP_MIN * 60000 ))" 2>/dev/null || true
+echo "ClockDream 屏保已生效（按遥控器任意键或语音即可瞬间唤醒）"
 
 echo ""
 echo "=== 7. 重启启动器生效 ==="
@@ -241,6 +244,8 @@ sleep 1
 adb -s "${TV}" shell am start -n com.gathin.tvhome/.MainActivity
 adb -s "${TV}" shell input keyevent KEYCODE_HOME
 sleep 2
+# 清理外置与临时目录配置文件（TvConfig 启动时已安全转存至私有沙盒 /data/data/com.gathin.tvhome/files/）
+adb -s "${TV}" shell rm -f /data/local/tmp/tvhome_config.json /sdcard/tvhome_config.json 2>/dev/null || true
 
 echo ""
 echo "=== 8. 激活无障碍静默截屏服务 (V2 屏幕内容识别架构) ==="

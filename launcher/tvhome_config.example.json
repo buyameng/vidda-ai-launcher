@@ -3,7 +3,17 @@
     "lan_url": "http://192.168.1.100:3425/v1",
     "local_url": "http://127.0.0.1:3425/v1",
     "api_key": "sk-your-ai-gateway-api-key",
-    "model": "google/models/gemini-3.8-flash"
+    "model": "google/models/gemini-3.8-flash",
+    "fallback": {
+      "enabled": true,
+      "name": "DeepSeek",
+      "url": "https://api.deepseek.com/chat/completions",
+      "api_key": "sk-your-deepseek-api-key",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "thinking": true,
+      "max_tokens": 512
+    }
   },
   "light": {
     "base_url": "http://192.168.1.101/api/webhook",
